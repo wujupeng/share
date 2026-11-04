@@ -85,7 +85,7 @@ fn run_migrate(config_path: &str) -> Result<(), String> {
     let db = init_database(&config)?;
     let conn = db.lock().unwrap();
     tracing::info!("迁移完成，已应用版本: 001, 002");
-    let _ = conn;
+    drop(conn);
     Ok(())
 }
 
@@ -148,9 +148,10 @@ pub async fn run_server(
     let setup_flag_data = web::Data::new(setup_flag.clone());
 
     let static_dir = config.server.static_dir.clone();
-    let static_dir_opt = static_dir
+    let static_dir_opt: Option<String> = static_dir
         .as_ref()
-        .filter(|d| std::path::Path::new(d).exists());
+        .filter(|d| std::path::Path::new(d).exists())
+        .cloned();
 
     let server = HttpServer::new(move || {
         let cors = Cors::default()
@@ -203,11 +204,11 @@ pub async fn run_server(
                     .route("/audit-logs", web::get().to(audit::list_audit_logs)),
             );
 
+        let static_dir_opt = static_dir_opt.clone();
         if let Some(dir) = &static_dir_opt {
             app = app.service(
                 actix_files::Files::new("/", dir)
-                    .index_file("index.html")
-                    .show_files_listing(false),
+                    .index_file("index.html"),
             );
         } else {
             app = app.route("/", web::get().to(|| async {
@@ -219,13 +220,13 @@ pub async fn run_server(
     })
     .bind(&bind_addr)?;
 
+    let server = server.run();
     let handle = server.handle();
-    let run_fut = server.run();
 
     match cancel_token {
         Some(token) => {
             tokio::select! {
-                res = run_fut => { return res; }
+                res = server => { return res; }
                 _ = token.cancelled() => {
                     tracing::info!("收到停止信号，优雅关闭...");
                     handle.stop(true).await;
@@ -234,7 +235,7 @@ pub async fn run_server(
             }
             Ok(())
         }
-        None => run_fut.await,
+        None => server.await,
     }
 }
 

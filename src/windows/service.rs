@@ -6,7 +6,7 @@ use crate::config::AppConfig;
 
 pub fn run_as_service(config_path: &str) -> std::io::Result<()> {
     use windows_service::service::{
-        ServiceAccess, ServiceControl, ServiceControlAccept, ServiceErrorControl,
+        ServiceAccess, ServiceControlAccept, ServiceErrorControl,
         ServiceExitCode, ServiceInfo, ServiceStartType, ServiceState, ServiceType,
     };
     use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
@@ -31,9 +31,8 @@ pub fn run_as_service(config_path: &str) -> std::io::Result<()> {
         let service_info = ServiceInfo {
             name: service_name.into(),
             display_name: display_name.into(),
-            description: Some("HTKIS ShareWeb 企业文件共享管理系统".into()),
             service_type: ServiceType::OWN_PROCESS,
-            start_type: ServiceStartType::Auto,
+            start_type: ServiceStartType::AutoStart,
             error_control: ServiceErrorControl::Normal,
             executable_path: std::env::current_exe()?,
             launch_arguments: vec!["--service".into(), config_path.into()],
@@ -42,7 +41,7 @@ pub fn run_as_service(config_path: &str) -> std::io::Result<()> {
             account_password: None,
         };
         manager
-            .create_service(service_info, ServiceAccess::QUERY_STATUS)
+            .create_service(&service_info, ServiceAccess::QUERY_STATUS)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("创建服务失败: {}", e)))?;
         tracing::info!("服务注册成功: {}", service_name);
     }
@@ -51,7 +50,7 @@ pub fn run_as_service(config_path: &str) -> std::io::Result<()> {
 }
 
 fn run_service_dispatch(config_path: &str) -> std::io::Result<()> {
-    use windows_service::service::{ServiceControl, ServiceControlHandler};
+    use windows_service::service::ServiceControl;
     use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
 
     let cancel_token = CancellationToken::new();
@@ -79,7 +78,7 @@ fn run_service_dispatch(config_path: &str) -> std::io::Result<()> {
             service_type: windows_service::service::ServiceType::OWN_PROCESS,
             current_state: ServiceState::Running,
             controls_accepted: ServiceControlAccept::STOP,
-            exit_code: windows_service::service::ServiceExitCode::NoError,
+            exit_code: windows_service::service::ServiceExitCode::NO_ERROR,
             checkpoint: 0,
             wait_hint: std::time::Duration::from_secs(10),
             process_id: None,
@@ -101,7 +100,7 @@ fn run_service_dispatch(config_path: &str) -> std::io::Result<()> {
             current_state: ServiceState::Stopped,
             controls_accepted: ServiceControlAccept::empty(),
             exit_code: match result {
-                Ok(()) => windows_service::service::ServiceExitCode::NoError,
+                Ok(()) => windows_service::service::ServiceExitCode::NO_ERROR,
                 Err(_) => windows_service::service::ServiceExitCode::ServiceSpecific(1),
             },
             checkpoint: 0,

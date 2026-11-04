@@ -35,9 +35,9 @@ pub async fn setup_status(
 ) -> HttpResponse {
     let conn = db.lock().unwrap();
     let initialized = is_initialized(&conn);
-    HttpResponse::Ok().json(ApiResponse::success(SetupStatus {
+    ApiResponse::success(SetupStatus {
         admin_initialized: initialized,
-    }))
+    })
 }
 
 pub async fn setup_admin(
@@ -49,7 +49,7 @@ pub async fn setup_admin(
     {
         let conn = db.lock().unwrap();
         if is_initialized(&conn) {
-            return ApiResponse::error(
+            return ApiResponse::<()>::error(
                 StatusCode::CONFLICT,
                 4090,
                 "SETUP_ALREADY_DONE",
@@ -58,7 +58,7 @@ pub async fn setup_admin(
     }
 
     if req.password.len() < 8 {
-        return ApiResponse::error(
+        return ApiResponse::<()>::error(
             StatusCode::BAD_REQUEST,
             4001,
             "WEAK_PASSWORD: 密码长度至少8位",
@@ -68,7 +68,7 @@ pub async fn setup_admin(
     let has_lower = req.password.chars().any(|c| c.is_lowercase());
     let has_digit = req.password.chars().any(|c| c.is_ascii_digit());
     if !(has_upper && has_lower && has_digit) {
-        return ApiResponse::error(
+        return ApiResponse::<()>::error(
             StatusCode::BAD_REQUEST,
             4001,
             "WEAK_PASSWORD: 需包含大小写字母与数字",
@@ -78,7 +78,7 @@ pub async fn setup_admin(
     let hash = match bcrypt::hash(&req.password, config.auth.bcrypt_cost) {
         Ok(h) => h,
         Err(e) => {
-            return ApiResponse::error(
+            return ApiResponse::<()>::error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 5000,
                 &format!("密码哈希失败: {}", e),
@@ -97,14 +97,14 @@ pub async fn setup_admin(
         if let Err(e) = UserRepo::create(&conn, &username, &hash, "admin") {
             if e.to_string().contains("UNIQUE") {
                 if let Err(e) = UserRepo::update_password(&conn, &username, &hash) {
-                    return ApiResponse::error(
+                    return ApiResponse::<()>::error(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         5001,
                         &format!("更新管理员密码失败: {}", e),
                     );
                 }
             } else {
-                return ApiResponse::error(
+                return ApiResponse::<()>::error(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     5002,
                     &format!("创建管理员失败: {}", e),
@@ -118,5 +118,5 @@ pub async fn setup_admin(
     }
 
     flag.store(true, Ordering::Relaxed);
-    ApiResponse::success_message("管理员设置成功")
+    ApiResponse::<()>::success_message("管理员设置成功")
 }

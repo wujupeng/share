@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use actix_web::{
+    body::{BoxBody, MessageBody},
     dev::{Service, ServiceRequest, ServiceResponse, Transform},
     Error, HttpResponse,
 };
@@ -28,9 +29,9 @@ impl<S, B> Transform<S, ServiceRequest> for SetupGuard
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
     S::Future: 'static,
-    B: 'static,
+    B: MessageBody + 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<BoxBody>;
     type Error = Error;
     type Transform = SetupGuardMiddleware<S>;
     type InitError = ();
@@ -55,9 +56,9 @@ impl<S, B> Service<ServiceRequest> for SetupGuardMiddleware<S>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
     S::Future: 'static,
-    B: 'static,
+    B: MessageBody + 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<BoxBody>;
     type Error = Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
@@ -74,16 +75,19 @@ where
 
         if allow {
             let fut = self.service.call(req);
-            Box::pin(async move { fut.await })
+            Box::pin(async move {
+                let res = fut.await?;
+                Ok(res.map_into_boxed_body())
+            })
         } else {
             Box::pin(async move {
-                let (req, _payload) = req.into_parts();
                 let res = HttpResponse::Forbidden().json(serde_json::json!({
                     "code": 4030,
                     "message": "SETUP_REQUIRED"
                 }));
-                Ok(ServiceResponse::new(req, res))
+                Ok(req.into_response(res))
             })
         }
     }
+
 }

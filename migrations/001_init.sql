@@ -54,3 +54,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_action_type ON audit_logs(action_type)
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action_time ON audit_logs(action_time);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_composite ON audit_logs(operator, action_type, action_time);
 CREATE INDEX IF NOT EXISTS idx_upload_tasks_status ON upload_tasks(status);
+-- 版本化迁移记录表
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);

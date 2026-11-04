@@ -7,3 +7,4 @@ pub mod users;
 pub mod permissions;
 pub mod audit;
 pub mod health;
+pub mod setup;

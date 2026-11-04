@@ -1,0 +1,56 @@
+# ShareWeb Windows Server 2019 配置模板
+# 由 install.ps1 在安装时渲染为实际配置
+# jwt_secret 将被随机生成的值替换
+
+[server]
+host = "0.0.0.0"
+port = 18888
+workers = 4
+# 前端静态资源目录（SPA）
+static_dir = "C:\\HTKIS\\ShareWeb\\frontend\\dist"
+
+[storage]
+# 共享根目录（指向已有 Windows SMB 共享物理路径）
+base_dir = "D:\\Share"
+max_file_size = 10737418240
+chunk_size = 5242880
+tmp_dir = "C:\\HTKIS\\ShareWeb\\data\\upload_tmp"
+
+[database]
+path = "C:\\HTKIS\\ShareWeb\\data\\shareweb.db"
+
+[auth]
+# 生产环境必须修改，install.ps1 会自动生成随机值
+jwt_secret = "change-me-in-production"
+jwt_expiration_hours = 24
+max_login_attempts = 5
+# 对齐 spec 4.3 安全性4：锁定 15 分钟
+lock_duration_minutes = 15
+bcrypt_cost = 12
+
+[log]
+level = "info"
+file_path = "C:\\HTKIS\\ShareWeb\\logs\\shareweb.log"
+# 日志保留天数
+retention_days = 30
+
+[platform]
+target = "windows"
+service_name = "HTKIS-ShareWeb"
+install_dir = "C:\\HTKIS\\ShareWeb"
+service_account = "HTKIS_SvcShareWeb"
+
+[security]
+# 共享根白名单（路径安全校验仅允许这些前缀）
+share_roots = ["D:\\Share"]
+# 首次启动强制设置管理员密码
+force_admin_setup = true
+# 日志保留天数
+log_retention_days = 30
+# HTTPS 证书路径（V1.0.1 预留，不强制启用）
+tls_cert = "C:\\HTKIS\\ShareWeb\\certs\\server.crt"
+tls_key = "C:\\HTKIS\\ShareWeb\\certs\\server.key"
+# TLS 最低版本
+tls_min_version = "1.2"
+# JWT 仅通过 Cookie 传递（避免出现在 URL/浏览器历史/代理日志）
+jwt_cookie_only = false

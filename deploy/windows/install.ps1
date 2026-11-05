@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
   ShareWeb 独立安装主流程
@@ -55,7 +55,7 @@ try {
 
     Write-Host "[4/10] 渲染配置..." -ForegroundColor Yellow
     $configPath = Join-Path $InstallDir "config\config.toml"
-    $jwtSecret = -join ((48..122) | Get-Random -Count 48 | ForEach-Object {[char]$_})
+    $jwtSecret = -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 48 | ForEach-Object {[char]$_})
     $content = Get-Content $configPath -Encoding UTF8
     $content = $content -replace 'change-me-in-production', $jwtSecret
     $content = $content -replace 'C:\\HTKIS\\ShareWeb', $InstallDir
@@ -66,7 +66,7 @@ try {
     $svcAccount = "HTKIS_SvcShareWeb"
     $existingUser = Get-LocalUser -Name $svcAccount -ErrorAction SilentlyContinue
     if (!$existingUser) {
-        $password = -join ((48..122) | Get-Random -Count 32 | ForEach-Object {[char]$_}) | ConvertTo-SecureString -AsPlainText -Force
+        $password = -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 32 | ForEach-Object {[char]$_}) | ConvertTo-SecureString -AsPlainText -Force
         New-LocalUser -Name $svcAccount -Password $password -Description "ShareWeb 服务账户" -PasswordNeverExpires | Out-Null
     }
     Write-Host "[OK] 服务账户就绪" -ForegroundColor Green

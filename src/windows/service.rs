@@ -1,113 +1,167 @@
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::OnceLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::AppConfig;
 
-pub fn run_as_service(config_path: &str) -> std::io::Result<()> {
-    use windows_service::service::{
-        ServiceAccess, ServiceControlAccept, ServiceErrorControl,
-        ServiceExitCode, ServiceInfo, ServiceStartType, ServiceState, ServiceType,
-    };
-    use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+static CONFIG_PATH: OnceLock<String> = OnceLock::new();
 
-    let manager = ServiceManager::local_computer(
-        None::<&str>,
-        ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
-    )
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("连接 SCM 失败: {}", e)))?;
+windows_service::define_windows_service!(ffi_service_main, my_service_main);
 
-    let service_name = "HTKIS-ShareWeb";
-    let display_name = "HTKIS ShareWeb File Manager";
-
-    let existing = manager.open_service(
-        service_name,
-        ServiceAccess::QUERY_STATUS | ServiceAccess::DELETE,
-    );
-
-    if existing.is_ok() {
-        tracing::info!("服务已注册，跳过创建");
-    } else {
-        let service_info = ServiceInfo {
-            name: service_name.into(),
-            display_name: display_name.into(),
-            service_type: ServiceType::OWN_PROCESS,
-            start_type: ServiceStartType::AutoStart,
-            error_control: ServiceErrorControl::Normal,
-            executable_path: std::env::current_exe()?,
-            launch_arguments: vec!["--service".into(), config_path.into()],
-            dependencies: vec![],
-            account_name: None,
-            account_password: None,
-        };
-        manager
-            .create_service(&service_info, ServiceAccess::QUERY_STATUS)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("创建服务失败: {}", e)))?;
-        tracing::info!("服务注册成功: {}", service_name);
-    }
-
-    run_service_dispatch(config_path)
-}
-
-fn run_service_dispatch(config_path: &str) -> std::io::Result<()> {
+fn my_service_main(_arguments: Vec<std::ffi::OsString>) {
     use windows_service::service::ServiceControl;
     use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
+    use windows_service::service::{ServiceState, ServiceStatus, ServiceControlAccept};
+
+    let config_path = CONFIG_PATH.get().map(|s| s.as_str()).unwrap_or("config.windows.toml");
+
+    std::fs::OpenOptions::new()
+        .create(true).append(true)
+        .open("C:\\service_debug.log").ok()
+        .and_then(|mut f| std::io::Write::write_all(&mut f, b"my_service_main entered\n").ok());
 
     let cancel_token = CancellationToken::new();
     let cancel_for_handler = cancel_token.clone();
 
     let event_handler = move |control_event| -> ServiceControlHandlerResult {
         match control_event {
-            windows_service::service::ServiceControl::Stop => {
+            ServiceControl::Stop => {
                 cancel_for_handler.cancel();
                 ServiceControlHandlerResult::NoError
             }
-            windows_service::service::ServiceControl::Interrogate => {
-                ServiceControlHandlerResult::NoError
-            }
+            ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
             _ => ServiceControlHandlerResult::NotImplemented,
         }
     };
 
-    let status_handle = service_control_handler::register("HTKIS-ShareWeb", event_handler)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("注册控制处理器失败: {}", e)))?;
+    let status_handle = match service_control_handler::register("HTKIS-ShareWeb", event_handler) {
+        Ok(h) => h,
+        Err(e) => {
+            std::fs::OpenOptions::new()
+                .create(true).append(true)
+                .open("C:\\service_debug.log").ok()
+                .and_then(|mut f| std::io::Write::write_all(&mut f, format!("register failed: {}\n", e).as_bytes()).ok());
+            return;
+        }
+    };
 
-    use windows_service::service::{ServiceState, ServiceStatus, ServiceControlAccept};
-    status_handle
-        .set_service_status(ServiceStatus {
-            service_type: windows_service::service::ServiceType::OWN_PROCESS,
-            current_state: ServiceState::Running,
-            controls_accepted: ServiceControlAccept::STOP,
-            exit_code: windows_service::service::ServiceExitCode::NO_ERROR,
-            checkpoint: 0,
-            wait_hint: std::time::Duration::from_secs(10),
-            process_id: None,
-        })
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("设置运行状态失败: {}", e)))?;
+    std::fs::OpenOptions::new()
+        .create(true).append(true)
+        .open("C:\\service_debug.log").ok()
+        .and_then(|mut f| std::io::Write::write_all(&mut f, b"register OK\n").ok());
 
-    let config = AppConfig::load(config_path)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    if let Err(e) = config.validate() {
-        return Err(std::io::Error::new(std::io::ErrorKind::Other, e));
+    if let Err(e) = status_handle.set_service_status(ServiceStatus {
+        service_type: windows_service::service::ServiceType::OWN_PROCESS,
+        current_state: ServiceState::StartPending,
+        controls_accepted: ServiceControlAccept::empty(),
+        exit_code: windows_service::service::ServiceExitCode::NO_ERROR,
+        checkpoint: 1,
+        wait_hint: std::time::Duration::from_secs(30),
+        process_id: None,
+    }) {
+        std::fs::OpenOptions::new()
+            .create(true).append(true)
+            .open("C:\\service_debug.log").ok()
+            .and_then(|mut f| std::io::Write::write_all(&mut f, format!("set_start_pending failed: {}\n", e).as_bytes()).ok());
+        return;
     }
 
-    let rt = tokio::runtime::Runtime::new()?;
+    let config = match AppConfig::load(config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            std::fs::OpenOptions::new()
+                .create(true).append(true)
+                .open("C:\\service_debug.log").ok()
+                .and_then(|mut f| std::io::Write::write_all(&mut f, format!("config load failed: {}\n", e).as_bytes()).ok());
+            let _ = status_handle.set_service_status(ServiceStatus {
+                service_type: windows_service::service::ServiceType::OWN_PROCESS,
+                current_state: ServiceState::Stopped,
+                controls_accepted: ServiceControlAccept::empty(),
+                exit_code: windows_service::service::ServiceExitCode::ServiceSpecific(1),
+                checkpoint: 0,
+                wait_hint: std::time::Duration::from_secs(0),
+                process_id: None,
+            });
+            return;
+        }
+    };
+    if let Err(e) = config.validate() {
+        std::fs::OpenOptions::new()
+            .create(true).append(true)
+            .open("C:\\service_debug.log").ok()
+            .and_then(|mut f| std::io::Write::write_all(&mut f, format!("config validate failed: {}\n", e).as_bytes()).ok());
+        return;
+    }
+
+    std::fs::OpenOptions::new()
+        .create(true).append(true)
+        .open("C:\\service_debug.log").ok()
+        .and_then(|mut f| std::io::Write::write_all(&mut f, b"config OK, setting Running\n").ok());
+
+    if let Err(e) = status_handle.set_service_status(ServiceStatus {
+        service_type: windows_service::service::ServiceType::OWN_PROCESS,
+        current_state: ServiceState::Running,
+        controls_accepted: ServiceControlAccept::STOP,
+        exit_code: windows_service::service::ServiceExitCode::NO_ERROR,
+        checkpoint: 0,
+        wait_hint: std::time::Duration::from_secs(10),
+        process_id: None,
+    }) {
+        std::fs::OpenOptions::new()
+            .create(true).append(true)
+            .open("C:\\service_debug.log").ok()
+            .and_then(|mut f| std::io::Write::write_all(&mut f, format!("set_running failed: {}\n", e).as_bytes()).ok());
+        return;
+    }
+
+    std::fs::OpenOptions::new()
+        .create(true).append(true)
+        .open("C:\\service_debug.log").ok()
+        .and_then(|mut f| std::io::Write::write_all(&mut f, b"Running OK, starting server\n").ok());
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            std::fs::OpenOptions::new()
+                .create(true).append(true)
+                .open("C:\\service_debug.log").ok()
+                .and_then(|mut f| std::io::Write::write_all(&mut f, format!("runtime failed: {}\n", e).as_bytes()).ok());
+            return;
+        }
+    };
+
     let result = rt.block_on(crate::run_server(config_path, Some(cancel_token)));
 
-    status_handle
-        .set_service_status(ServiceStatus {
-            service_type: windows_service::service::ServiceType::OWN_PROCESS,
-            current_state: ServiceState::Stopped,
-            controls_accepted: ServiceControlAccept::empty(),
-            exit_code: match result {
-                Ok(()) => windows_service::service::ServiceExitCode::NO_ERROR,
-                Err(_) => windows_service::service::ServiceExitCode::ServiceSpecific(1),
-            },
-            checkpoint: 0,
-            wait_hint: std::time::Duration::from_secs(0),
-            process_id: None,
-        })
-        .ok();
+    std::fs::OpenOptions::new()
+        .create(true).append(true)
+        .open("C:\\service_debug.log").ok()
+        .and_then(|mut f| std::io::Write::write_all(&mut f, format!("run_server returned: {:?}\n", result.is_ok()).as_bytes()).ok());
 
-    result
+    let _ = status_handle.set_service_status(ServiceStatus {
+        service_type: windows_service::service::ServiceType::OWN_PROCESS,
+        current_state: ServiceState::Stopped,
+        controls_accepted: ServiceControlAccept::empty(),
+        exit_code: match result {
+            Ok(()) => windows_service::service::ServiceExitCode::NO_ERROR,
+            Err(_) => windows_service::service::ServiceExitCode::ServiceSpecific(1),
+        },
+        checkpoint: 0,
+        wait_hint: std::time::Duration::from_secs(0),
+        process_id: None,
+    });
+}
+
+pub fn run_as_service(config_path: &str) -> std::io::Result<()> {
+    std::fs::write("C:\\service_debug.log", "run_as_service entered\n").ok();
+
+    let _ = CONFIG_PATH.set(config_path.to_string());
+
+    windows_service::service_dispatcher::start("HTKIS-ShareWeb", ffi_service_main)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("服务调度器启动失败: {}", e)))?;
+
+    std::fs::OpenOptions::new()
+        .create(true).append(true)
+        .open("C:\\service_debug.log").ok()
+        .and_then(|mut f| std::io::Write::write_all(&mut f, b"dispatcher returned\n").ok());
+
+    Ok(())
 }

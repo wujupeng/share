@@ -26,6 +26,7 @@ impl FileService {
             .map_err(|e| AppError::PathTraversal(e))?;
 
         let full_path = Path::new(&safe_path);
+
         if !full_path.is_dir() {
             return Err(AppError::NotFound("目录不存在".to_string()));
         }

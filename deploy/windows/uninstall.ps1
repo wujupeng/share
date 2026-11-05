@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
   ShareWeb 卸载主流程（零侵入：仅删除 ShareWeb 自身资源）

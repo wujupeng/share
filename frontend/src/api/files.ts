@@ -20,13 +20,13 @@ export interface FileListResponse {
 
 export const filesApi = {
   listFiles(params: { path?: string; show_hidden?: boolean; sort_by?: string; sort_order?: string; page?: number; page_size?: number }) {
-    return api.get<never, { data: FileListResponse }>('/files', { params })
+    return api.get<{ data: FileListResponse }>('/files', { params })
   },
   getTree(path?: string) {
-    return api.get<never, { data: any[] }>('/files/tree', { params: { path } })
+    return api.get<{ data: any[] }>('/files/tree', { params: { path } })
   },
   search(keyword: string, path?: string, maxDepth?: number) {
-    return api.get<never, { data: FileInfo[] }>('/files/search', { params: { keyword, path, max_depth: maxDepth } })
+    return api.get<{ data: FileInfo[] }>('/files/search', { params: { keyword, path, max_depth: maxDepth } })
   },
   mkdir(parentPath: string, name: string) {
     return api.post('/files/mkdir', { parent_path: parentPath, name })

@@ -76,7 +76,7 @@ pub fn sanitize_path(path: &str, base_dir: &str) -> Result<String, String> {
     {
         if let Some(first) = components.first() {
             if first.len() >= 2 && first.as_bytes()[1] == b':' {
-                result.push(first);
+                result.push(format!("{}\\", first));
             }
         }
     }

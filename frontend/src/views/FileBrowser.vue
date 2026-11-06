@@ -2,6 +2,9 @@
   <el-container class="file-browser">
     <el-header class="toolbar">
       <div class="toolbar-left">
+        <el-button class="menu-toggle" link @click="sidebarOpen = !sidebarOpen">
+          <el-icon :size="20"><Menu /></el-icon>
+        </el-button>
         <el-breadcrumb separator="/">
           <el-breadcrumb-item v-for="item in breadcrumbs" :key="item.path">
             <a @click="navigateTo(item.path)">{{ item.name }}</a>
@@ -9,7 +12,7 @@
         </el-breadcrumb>
       </div>
       <div class="toolbar-right">
-        <el-input v-model="searchKeyword" placeholder="搜索文件..." style="width: 200px" clearable @keyup.enter="doSearch">
+        <el-input v-model="searchKeyword" placeholder="搜索文件..." class="search-input" clearable @keyup.enter="doSearch">
           <template #append>
             <el-button @click="doSearch">搜索</el-button>
           </template>
@@ -37,9 +40,16 @@
         <el-button @click="handleLogout">退出</el-button>
       </div>
     </el-header>
-    <el-container>
-      <el-aside width="240px" class="sidebar">
-        <el-tree :data="treeData" :props="treeProps" lazy :load="loadTreeNode" @node-click="onTreeNodeClick" highlight-current node-key="path" />
+    <el-container class="main-container">
+      <div v-if="isMobile && sidebarOpen" class="sidebar-mask" @click="sidebarOpen = false" />
+      <el-aside class="sidebar" :class="{ 'sidebar-open': isMobile && sidebarOpen }">
+        <div class="sidebar-header">
+          <span class="sidebar-title">目录</span>
+          <el-button v-if="isMobile" link @click="sidebarOpen = false" class="sidebar-close">
+            <el-icon><Close /></el-icon>
+          </el-button>
+        </div>
+        <el-tree :data="treeData" :props="treeProps" lazy :load="loadTreeNode" @node-click="onTreeNodeClick" highlight-current node-key="path" :default-expanded-keys="['/']" />
       </el-aside>
       <el-main class="file-main">
         <el-table v-if="viewMode === 'list'" :data="fileList" @row-dblclick="onRowDblClick" @row-contextmenu="onRowContextMenu" stripe>
@@ -54,9 +64,11 @@
             <template #default="{ row }">{{ row.is_dir ? '-' : formatSize(row.size) }}</template>
           </el-table-column>
           <el-table-column prop="modified" label="修改时间" width="180" />
-          <el-table-column label="操作" width="250">
+          <el-table-column label="操作" width="360">
             <template #default="{ row }">
-              <el-button size="small" @click="previewFile(row)" v-if="!row.is_dir && row.preview_type !== 'none'">预览</el-button>
+              <el-button size="small" @click="viewOnlyOffice(row)" v-if="!row.is_dir && canEditOffice(row)">查看</el-button>
+              <el-button size="small" type="primary" @click="openOnlyOfficeEdit(row)" v-if="!row.is_dir && canEditOffice(row)">编辑</el-button>
+              <el-button size="small" @click="previewFile(row)" v-if="!row.is_dir && canPreview(row)">预览</el-button>
               <el-button size="small" @click="downloadFile(row)" v-if="!row.is_dir">下载</el-button>
               <el-button size="small" @click="showRenameDialog(row)">重命名</el-button>
               <el-button size="small" type="danger" @click="confirmDelete(row)">删除</el-button>
@@ -64,11 +76,33 @@
           </el-table-column>
         </el-table>
         <div v-else class="grid-view">
-          <div v-for="file in fileList" :key="file.path" class="grid-item" @dblclick="onRowDblClick(file)" @contextmenu.prevent="onRowContextMenu(file, $event)">
-            <el-icon :size="48" :color="file.is_dir ? '#409eff' : '#909399'">
-              <Folder v-if="file.is_dir" /><Document v-else />
-            </el-icon>
-            <div class="grid-name">{{ file.name }}</div>
+          <div v-for="file in fileList" :key="file.path" class="grid-card" @dblclick="onRowDblClick(file)" @contextmenu.prevent="onRowContextMenu(file, $event)">
+            <div class="card-icon" :style="{ background: getFileIconColor(file) }">
+              <el-icon v-if="file.is_dir" :size="28" color="#fff"><Folder /></el-icon>
+              <span v-else class="card-icon-text">{{ getFileIconLabel(file) }}</span>
+            </div>
+            <div class="card-info">
+              <div class="card-name" :title="file.name">{{ file.name }}</div>
+              <div class="card-meta">
+                <span v-if="!file.is_dir">{{ formatSize(file.size) }}</span>
+                <span v-else>文件夹</span>
+                <span class="card-date">{{ formatDate(file.modified) }}</span>
+              </div>
+            </div>
+            <div class="card-actions">
+              <el-button v-if="!file.is_dir && canEditOffice(file)" size="small" circle @click.stop="viewOnlyOffice(file)" title="查看">
+                <el-icon><View /></el-icon>
+              </el-button>
+              <el-button v-if="!file.is_dir && canPreview(file) && !canEditOffice(file)" size="small" circle @click.stop="previewFile(file)" title="预览">
+                <el-icon><View /></el-icon>
+              </el-button>
+              <el-button v-if="!file.is_dir && canEditOffice(file)" size="small" circle type="primary" @click.stop="openOnlyOfficeEdit(file)" title="编辑">
+                <el-icon><Edit /></el-icon>
+              </el-button>
+              <el-button v-if="!file.is_dir" size="small" circle @click.stop="downloadFile(file)" title="下载">
+                <el-icon><Download /></el-icon>
+              </el-button>
+            </div>
           </div>
         </div>
       </el-main>
@@ -101,33 +135,83 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showPreviewDialog" :title="previewFileName" width="80%" top="5vh">
+    <el-dialog v-model="showPreviewDialog" :title="previewFileName" class="preview-dialog" :width="isMobile ? '100%' : '85%'" :top="isMobile ? '0' : '3vh'" :fullscreen="isMobile">
       <div class="preview-container">
-        <img v-if="previewType === 'image'" :src="previewUrl" style="max-width: 100%; max-height: 70vh" />
-        <video v-else-if="previewType === 'video'" :src="previewUrl" controls style="max-width: 100%; max-height: 70vh" />
+        <img v-if="previewType === 'image'" :src="previewUrl" style="max-width: 100%; max-height: calc(100vh - 180px)" />
+        <video v-else-if="previewType === 'video'" :src="previewUrl" controls style="max-width: 100%; max-height: calc(100vh - 180px)" />
         <audio v-else-if="previewType === 'audio'" :src="previewUrl" controls />
-        <iframe v-else-if="previewType === 'pdf'" :src="previewUrl" style="width: 100%; height: 70vh" />
+        <iframe v-else-if="previewType === 'pdf'" :src="previewUrl" style="width: 100%; height: calc(100vh - 180px); border: none" />
         <pre v-else-if="previewType === 'text'" class="text-preview">{{ textContent }}</pre>
         <div v-else>不支持预览此文件类型</div>
+      </div>
+    </el-dialog>
+
+    <el-dialog v-model="showOnlyOfficeDialog" :title="`编辑: ${onlyOfficeFileName}`" class="onlyoffice-dialog" :class="{ 'onlyoffice-dialog-fullscreen': isMobile }" :width="isMobile ? '100%' : '95%'" :top="isMobile ? '0' : '2vh'" @close="destroyOnlyOfficeEditor" :close-on-click-modal="false" :fullscreen="isMobile">
+      <div v-loading="onlyOfficeLoading" class="onlyoffice-container">
+        <div id="onlyoffice-editor" class="onlyoffice-editor"></div>
+      </div>
+    </el-dialog>
+
+    <el-dialog v-model="showArchiveDialog" :title="`压缩包内容: ${archiveFileName}`" width="700px">
+      <el-table :data="archiveEntries" v-loading="archiveLoading" max-height="500" stripe>
+        <el-table-column prop="name" label="名称" min-width="250">
+          <template #default="{ row }">
+            <el-icon v-if="row.is_dir" style="color: #409eff"><Folder /></el-icon>
+            <el-icon v-else><Document /></el-icon>
+            <span style="margin-left: 8px">{{ row.name }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="size" label="大小" width="120">
+          <template #default="{ row }">{{ row.is_dir ? '-' : formatSize(row.size) }}</template>
+        </el-table-column>
+        <el-table-column prop="compressed_size" label="压缩后" width="120">
+          <template #default="{ row }">{{ row.is_dir ? '-' : formatSize(row.compressed_size) }}</template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+
+    <el-dialog v-model="showApkDialog" :title="`APK 信息: ${apkFileName}`" width="600px">
+      <div v-loading="apkLoading">
+        <template v-if="apkInfo">
+          <el-descriptions :column="1" border>
+            <el-descriptions-item label="文件大小">{{ formatSize(apkInfo.file_size) }}</el-descriptions-item>
+            <el-descriptions-item label="解压后大小">{{ formatSize(apkInfo.uncompressed_size) }}</el-descriptions-item>
+            <el-descriptions-item label="条目数">{{ apkInfo.entry_count }}</el-descriptions-item>
+          </el-descriptions>
+          <el-divider content-position="left">关键文件</el-divider>
+          <el-table :data="apkInfo.key_entries" max-height="300" stripe size="small">
+            <el-table-column prop="name" label="名称" min-width="200" />
+            <el-table-column prop="size" label="大小" width="100">
+              <template #default="{ row }">{{ formatSize(row.size) }}</template>
+            </el-table-column>
+          </el-table>
+        </template>
       </div>
     </el-dialog>
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { filesApi, type FileInfo } from '@/api/files'
 import { uploadApi } from '@/api/upload'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Folder, Document, List, Grid, ArrowDown, Upload } from '@element-plus/icons-vue'
+import { Folder, Document, List, Grid, ArrowDown, Upload, Menu, Close, View, Edit, Download } from '@element-plus/icons-vue'
 
 const authStore = useAuthStore()
 const currentPath = ref('/')
 const fileList = ref<FileInfo[]>([])
-const treeData = ref<any[]>([])
-const viewMode = ref<'list' | 'grid'>('list')
+const treeData = ref<any[]>([{ name: '根目录', path: '/', has_children: true }])
+const viewMode = ref<'list' | 'grid'>('grid')
 const searchKeyword = ref('')
+
+const isMobile = ref(false)
+const sidebarOpen = ref(false)
+
+function checkMobile() {
+  isMobile.value = window.innerWidth <= 768
+}
 
 const showMkdirDialog = ref(false)
 const newFolderName = ref('')
@@ -144,10 +228,35 @@ const previewUrl = ref('')
 const previewFileName = ref('')
 const textContent = ref('')
 
+const showOnlyOfficeDialog = ref(false)
+const onlyOfficeFileName = ref('')
+const onlyOfficeLoading = ref(false)
+let onlyOfficeEditor: any = null
+let onlyOfficeScriptLoaded = false
+
+const showArchiveDialog = ref(false)
+const archiveFileName = ref('')
+const archiveEntries = ref<any[]>([])
+const archiveLoading = ref(false)
+
+const showApkDialog = ref(false)
+const apkFileName = ref('')
+const apkInfo = ref<any>(null)
+const apkLoading = ref(false)
+
+const OFFICE_EXTS = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'wps', 'et', 'dps', 'csv', 'rtf', 'odt', 'ods', 'odp', 'txt']
+const ARCHIVE_EXTS = ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz']
+
+function getFileExt(name: string): string {
+  const dot = name.lastIndexOf('.')
+  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : ''
+}
+
 const treeProps = { label: 'name', children: 'children', isLeaf: (data: any) => !data.has_children }
 
 const breadcrumbs = computed(() => {
-  const parts = currentPath.value.split('/').filter(Boolean)
+  const normalizedPath = currentPath.value.replace(/\\/g, '/')
+  const parts = normalizedPath.split('/').filter(Boolean)
   const crumbs = [{ name: '根目录', path: '/' }]
   let path = ''
   for (const part of parts) {
@@ -167,7 +276,8 @@ async function loadFiles() {
 }
 
 async function loadTreeNode(node: any, resolve: Function) {
-  const path = node.level === 0 ? '/' : node.data.path
+  const rawPath = node.level === 0 ? '/' : node.data.path
+  const path = rawPath.replace(/\\/g, '/')
   try {
     const res = await filesApi.getTree(path)
     resolve(res.data.data || [])
@@ -178,18 +288,129 @@ async function loadTreeNode(node: any, resolve: Function) {
 
 function onTreeNodeClick(data: any) {
   navigateTo(data.path)
+  if (isMobile.value) sidebarOpen.value = false
 }
 
 async function navigateTo(path: string) {
-  currentPath.value = path
+  currentPath.value = path.replace(/\\/g, '/')
   await loadFiles()
 }
 
 function onRowDblClick(row: FileInfo) {
   if (row.is_dir) {
-    navigateTo(row.path)
+    navigateTo(row.path.replace(/\\/g, '/'))
+    return
+  }
+  const ext = getFileExt(row.name)
+  if (ext === 'txt') {
+    previewFile(row)
+    return
+  }
+  if (OFFICE_EXTS.includes(ext)) {
+    openOnlyOfficeEdit(row)
+  } else if (ARCHIVE_EXTS.includes(ext)) {
+    previewArchiveFile(row)
+  } else if (ext === 'apk') {
+    previewApkFile(row)
   } else {
     previewFile(row)
+  }
+}
+
+function loadOnlyOfficeScript(server: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (onlyOfficeScriptLoaded && (window as any).DocsAPI) {
+      resolve()
+      return
+    }
+    const script = document.createElement('script')
+    script.src = `${server}/web-apps/apps/api/documents/api.js`
+    script.onload = () => {
+      onlyOfficeScriptLoaded = true
+      resolve()
+    }
+    script.onerror = () => reject(new Error('加载 OnlyOffice JS SDK 失败'))
+    document.head.appendChild(script)
+  })
+}
+
+async function openOnlyOfficeEdit(file: FileInfo, mode?: string) {
+  onlyOfficeFileName.value = file.name
+  onlyOfficeLoading.value = true
+  showOnlyOfficeDialog.value = true
+  try {
+    const res = await filesApi.getOnlyOfficeConfig(file.path, mode)
+    const { config, server } = res.data.data
+    await loadOnlyOfficeScript(server)
+    destroyOnlyOfficeEditor()
+    await new Promise(resolve => setTimeout(resolve, 300))
+
+    const dialog = document.querySelector('.onlyoffice-dialog') as HTMLElement
+    if (dialog) {
+      dialog.style.height = '96vh'
+      dialog.style.maxHeight = '96vh'
+      const body = dialog.querySelector('.el-dialog__body') as HTMLElement
+      if (body) {
+        body.style.padding = '0'
+        body.style.height = 'calc(96vh - 55px)'
+        body.style.overflow = 'hidden'
+      }
+    }
+    const editorDiv = document.getElementById('onlyoffice-editor')
+    if (editorDiv) {
+      editorDiv.style.width = '100%'
+      editorDiv.style.height = '100%'
+    }
+
+    onlyOfficeEditor = new (window as any).DocsAPI.DocEditor('onlyoffice-editor', config)
+  } catch (e: any) {
+    ElMessage.error('打开编辑器失败: ' + (e.message || ''))
+    showOnlyOfficeDialog.value = false
+  } finally {
+    onlyOfficeLoading.value = false
+  }
+}
+
+function viewOnlyOffice(file: FileInfo) {
+  openOnlyOfficeEdit(file, 'view')
+}
+
+function destroyOnlyOfficeEditor() {
+  if (onlyOfficeEditor) {
+    try { onlyOfficeEditor.destroyEditor() } catch {}
+    onlyOfficeEditor = null
+  }
+}
+
+async function previewArchiveFile(file: FileInfo) {
+  archiveFileName.value = file.name
+  archiveEntries.value = []
+  showArchiveDialog.value = true
+  archiveLoading.value = true
+  try {
+    const res = await filesApi.previewArchive(file.path)
+    archiveEntries.value = res.data.data.entries
+  } catch (e: any) {
+    ElMessage.error('读取压缩文件失败: ' + (e.message || ''))
+    showArchiveDialog.value = false
+  } finally {
+    archiveLoading.value = false
+  }
+}
+
+async function previewApkFile(file: FileInfo) {
+  apkFileName.value = file.name
+  apkInfo.value = null
+  showApkDialog.value = true
+  apkLoading.value = true
+  try {
+    const res = await filesApi.previewApk(file.path)
+    apkInfo.value = res.data.data
+  } catch (e: any) {
+    ElMessage.error('读取APK信息失败: ' + (e.message || ''))
+    showApkDialog.value = false
+  } finally {
+    apkLoading.value = false
   }
 }
 
@@ -330,21 +551,178 @@ function formatSize(bytes: number): string {
   return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i]
 }
 
+function formatDate(dateStr: string): string {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return ''
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+function getFileIconColor(file: FileInfo): string {
+  if (file.is_dir) return '#409eff'
+  const ext = getFileExt(file.name)
+  const colors: Record<string, string> = {
+    pdf: '#f56c6c',
+    doc: '#2b579a', docx: '#2b579a', wps: '#2b579a',
+    xls: '#217346', xlsx: '#217346', et: '#217346', csv: '#217346',
+    ppt: '#d24726', pptx: '#d24726', dps: '#d24726',
+    jpg: '#9c27b0', jpeg: '#9c27b0', png: '#9c27b0', gif: '#9c27b0', bmp: '#9c27b0', svg: '#9c27b0',
+    mp4: '#ff5722', avi: '#ff5722', mkv: '#ff5722', mov: '#ff5722',
+    mp3: '#8bc34a', wav: '#8bc34a', flac: '#8bc34a',
+    zip: '#ffc107', rar: '#ffc107', '7z': '#ffc107', tar: '#ffc107', gz: '#ffc107',
+    apk: '#009688',
+    txt: '#607d8b', rtf: '#607d8b', md: '#607d8b',
+  }
+  return colors[ext] || '#909399'
+}
+
+function getFileIconLabel(file: FileInfo): string {
+  if (file.is_dir) return ''
+  const ext = getFileExt(file.name)
+  if (!ext) return 'FILE'
+  return ext.toUpperCase().slice(0, 4)
+}
+
+function canPreview(file: FileInfo): boolean {
+  return !!file.preview_type && file.preview_type !== 'none'
+}
+
+function canEditOffice(file: FileInfo): boolean {
+  return OFFICE_EXTS.includes(getFileExt(file.name))
+}
+
 onMounted(() => {
+  checkMobile()
+  window.addEventListener('resize', checkMobile)
   loadFiles()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', checkMobile)
+  destroyOnlyOfficeEditor()
 })
 </script>
 
 <style scoped>
 .file-browser { height: 100vh; }
-.toolbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; border-bottom: 1px solid #e4e7ed; }
-.toolbar-right { display: flex; gap: 8px; align-items: center; }
-.sidebar { border-right: 1px solid #e4e7ed; overflow-y: auto; }
+.toolbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; border-bottom: 1px solid #e4e7ed; flex-wrap: wrap; gap: 8px; }
+.toolbar-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.toolbar-right { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.search-input { width: 200px; }
+.menu-toggle { display: none; }
+.main-container { flex: 1; min-height: 0; }
+.sidebar { width: 240px; border-right: 1px solid #e4e7ed; overflow-y: auto; flex-shrink: 0; }
+.sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid #e4e7ed; }
+.sidebar-title { font-weight: 600; font-size: 14px; color: #606266; }
+.sidebar-close { display: none; }
+.sidebar-mask { display: none; }
 .file-main { padding: 16px; overflow-y: auto; }
-.grid-view { display: flex; flex-wrap: wrap; gap: 16px; }
-.grid-item { width: 100px; text-align: center; cursor: pointer; padding: 8px; border-radius: 4px; }
-.grid-item:hover { background: #f5f7fa; }
-.grid-name { margin-top: 4px; font-size: 12px; word-break: break-all; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grid-view { display: flex; flex-wrap: wrap; gap: 16px; padding: 8px; }
+.grid-card {
+  width: 160px;
+  background: #fff;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.grid-card:hover {
+  border-color: #409eff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
+}
+.card-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+.card-icon-text {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.card-info { width: 100%; text-align: center; }
+.card-name {
+  font-size: 13px;
+  color: #303133;
+  line-height: 1.4;
+  word-break: break-all;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 4px;
+  min-height: 18px;
+}
+.card-meta {
+  font-size: 11px;
+  color: #909399;
+  display: flex;
+  justify-content: space-between;
+  padding: 0 4px;
+}
+.card-date { color: #c0c4cc; }
+.card-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: none;
+  gap: 4px;
+}
+.grid-card:hover .card-actions { display: flex; }
 .preview-container { text-align: center; }
-.text-preview { text-align: left; max-height: 70vh; overflow: auto; background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 4px; font-size: 14px; }
+.preview-dialog .el-dialog__body { padding: 0; }
+.preview-container { padding: 16px; box-sizing: border-box; }
+.text-preview { text-align: left; height: calc(100vh - 160px); overflow: auto; background: #f5f7fa; color: #303133; padding: 20px; border-radius: 4px; font-size: 14px; white-space: pre-wrap; word-wrap: break-word; margin: 0; border: 1px solid #e4e7ed; line-height: 1.6; }
+.onlyoffice-dialog.el-dialog { max-height: 96vh !important; }
+.onlyoffice-dialog .el-dialog__body { padding: 0 !important; height: calc(96vh - 55px) !important; overflow: hidden !important; }
+.onlyoffice-container { width: 100%; height: 100%; }
+.onlyoffice-editor { width: 100%; height: 100%; }
+.onlyoffice-dialog-fullscreen .el-dialog__body { padding: 0 !important; height: calc(100vh - 55px) !important; }
+.onlyoffice-dialog-fullscreen .onlyoffice-editor { height: 100%; }
+
+@media (max-width: 768px) {
+  .menu-toggle { display: inline-flex; }
+  .toolbar { padding: 8px 12px; }
+  .search-input { width: 140px; }
+  .toolbar-right { gap: 4px; }
+  .main-container { position: relative; }
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 56px;
+    bottom: 0;
+    z-index: 200;
+    width: 240px;
+    background: #fff;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    box-shadow: 2px 0 8px rgba(0,0,0,0.15);
+  }
+  .sidebar-open { transform: translateX(0); }
+  .sidebar-close { display: inline-flex; }
+  .sidebar-mask { display: block; position: fixed; left: 0; top: 56px; right: 0; bottom: 0; background: rgba(0,0,0,0.4); z-index: 150; }
+  .file-main { padding: 12px; }
+  .grid-card { width: 130px; padding: 8px; }
+  .onlyoffice-dialog .el-dialog__body { height: calc(100vh - 55px) !important; }
+  .onlyoffice-container { height: 100%; }
+  .onlyoffice-editor { height: 100%; }
+  .text-preview { height: calc(100vh - 100px); }
+}
+
+@media (max-width: 480px) {
+  .search-input { width: 100px; }
+  .toolbar-right .el-button { padding: 8px; }
+}
 </style>

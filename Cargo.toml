@@ -30,6 +30,7 @@ urlencoding = "2"
 async-stream = "0.3"
 bytes = "1"
 sha2 = "0.10"
+ureq = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-service = "0.7"

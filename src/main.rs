@@ -14,12 +14,12 @@ use std::sync::{Mutex, Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use actix_cors::Cors;
-use actix_web::{web, App, HttpServer, middleware as actix_middleware, HttpResponse};
+use actix_web::{web, App, HttpServer, HttpRequest, middleware as actix_middleware, HttpResponse};
 use rusqlite::Connection;
 use tracing_subscriber::{fmt, EnvFilter};
 
 use crate::config::AppConfig;
-use crate::handlers::{auth, health, files, upload, download, preview, users, permissions, audit, setup};
+use crate::handlers::{auth, health, files, upload, download, preview, users, permissions, audit, setup, webdav, onlyoffice};
 use crate::middleware::setup_guard::SetupGuard;
 use crate::repositories::user_repo::UserRepo;
 use crate::services::auth_service::AuthService;
@@ -95,6 +95,29 @@ fn default_config_path() -> String {
     } else {
         "config.toml".to_string()
     }
+}
+
+async fn spa_fallback(
+    req: HttpRequest,
+    static_dir: web::Data<Option<String>>,
+) -> HttpResponse {
+    let path = req.path();
+    if let Some(dir) = static_dir.as_ref() {
+        let rel_path = path.trim_start_matches('/');
+        if !rel_path.is_empty() {
+            let file_path = std::path::Path::new(dir).join(rel_path);
+            if file_path.is_file() {
+                if let Ok(file) = actix_files::NamedFile::open(&file_path) {
+                    return file.into_response(&req);
+                }
+            }
+        }
+        let index_path = std::path::Path::new(dir).join("index.html");
+        if let Ok(file) = actix_files::NamedFile::open(&index_path) {
+            return file.into_response(&req);
+        }
+    }
+    HttpResponse::NotFound().body("Static files not configured")
 }
 
 pub async fn run_server(
@@ -187,6 +210,10 @@ pub async fn run_server(
                     .route("/files/delete", web::delete().to(files::delete))
                     .route("/files/move", web::post().to(files::move_file))
                     .route("/files/copy", web::post().to(files::copy_file))
+                    .route("/files/archive", web::get().to(files::preview_archive))
+                    .route("/files/apk", web::get().to(files::preview_apk))
+                    .route("/files/onlyoffice/config", web::get().to(onlyoffice::get_config))
+                    .route("/files/onlyoffice/callback", web::post().to(onlyoffice::callback))
                     .route("/files/download", web::get().to(download::download_file))
                     .route("/files/download/batch", web::post().to(download::batch_download))
                     .route("/files/preview", web::get().to(preview::preview_file))
@@ -204,12 +231,32 @@ pub async fn run_server(
                     .route("/audit-logs", web::get().to(audit::list_audit_logs)),
             );
 
+        let propfind_method = actix_web::http::Method::from_bytes(b"PROPFIND").unwrap();
+        let mkcol_method = actix_web::http::Method::from_bytes(b"MKCOL").unwrap();
+        let move_method = actix_web::http::Method::from_bytes(b"MOVE").unwrap();
+        let copy_method = actix_web::http::Method::from_bytes(b"COPY").unwrap();
+        app = app.service(
+            web::resource("/dav/{path:.*}")
+                .route(web::method(actix_web::http::Method::OPTIONS).to(webdav::options))
+                .route(web::method(propfind_method.clone()).to(webdav::propfind))
+                .route(web::get().to(webdav::get_file))
+                .route(web::head().to(webdav::head_file))
+                .route(web::put().to(webdav::put_file))
+                .route(web::method(mkcol_method).to(webdav::mkcol))
+                .route(web::delete().to(webdav::delete))
+                .route(web::method(move_method).to(webdav::move_resource))
+                .route(web::method(copy_method).to(webdav::copy_resource))
+        );
+        app = app.service(
+            web::resource("/dav")
+                .route(web::method(actix_web::http::Method::OPTIONS).to(webdav::options))
+                .route(web::method(propfind_method.clone()).to(webdav::propfind))
+        );
+
         let static_dir_opt = static_dir_opt.clone();
-        if let Some(dir) = &static_dir_opt {
-            app = app.service(
-                actix_files::Files::new("/", dir)
-                    .index_file("index.html"),
-            );
+        app = app.app_data(web::Data::new(static_dir_opt.clone()));
+        if let Some(_dir) = &static_dir_opt {
+            app = app.default_service(web::to(spa_fallback));
         } else {
             app = app.route("/", web::get().to(|| async {
                 HttpResponse::Ok().body("ShareWeb API — 前端静态资源未配置")

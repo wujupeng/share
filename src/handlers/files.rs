@@ -8,6 +8,7 @@ use crate::middleware::auth::extract_token_from_header;
 use crate::services::auth_service::AuthService;
 use crate::repositories::permission_repo::PermissionRepo;
 use crate::repositories::audit_repo::AuditRepo;
+use crate::utils::path_sanitizer::sanitize_path;
 
 #[derive(Deserialize)]
 pub struct ListQuery {
@@ -337,5 +338,109 @@ pub async fn copy_file(
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "code": 0,
         "message": "复制成功"
+    })))
+}
+#[derive(Deserialize)]
+pub struct PreviewQuery {
+    pub path: Option<String>,
+}
+
+pub async fn preview_archive(
+    file_service: web::Data<FileService>,
+    auth_service: web::Data<AuthService>,
+    db: web::Data<Arc<Mutex<Connection>>>,
+    req: HttpRequest,
+    query: web::Query<PreviewQuery>,
+) -> Result<HttpResponse, AppError> {
+    let path = query.path.as_deref().unwrap_or("/");
+    let role = get_user_role(&req, &auth_service)?;
+    let allowed_paths = get_allowed_paths(&db, &role);
+    if !is_path_allowed(path, &allowed_paths) {
+        return Err(AppError::Forbidden("无权访问此路径".to_string()));
+    }
+
+    let safe_path = sanitize_path(path, &file_service.base_dir)
+        .map_err(|e| AppError::PathTraversal(e))?;
+
+    let file = std::fs::File::open(&safe_path)
+        .map_err(|e| AppError::Internal(format!("打开文件失败: {}", e)))?;
+
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| AppError::Internal(format!("读取压缩文件失败: {}", e)))?;
+
+    let mut entries = Vec::new();
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i)
+            .map_err(|e| AppError::Internal(format!("读取条目失败: {}", e)))?;
+        entries.push(serde_json::json!({
+            "name": entry.name().to_string(),
+            "size": entry.size(),
+            "compressed_size": entry.compressed_size(),
+            "is_dir": entry.is_dir(),
+        }));
+    }
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "code": 0,
+        "message": "success",
+        "data": {
+            "entries": entries,
+            "total": entries.len()
+        }
+    })))
+}
+
+pub async fn preview_apk(
+    file_service: web::Data<FileService>,
+    auth_service: web::Data<AuthService>,
+    db: web::Data<Arc<Mutex<Connection>>>,
+    req: HttpRequest,
+    query: web::Query<PreviewQuery>,
+) -> Result<HttpResponse, AppError> {
+    let path = query.path.as_deref().unwrap_or("/");
+    let role = get_user_role(&req, &auth_service)?;
+    let allowed_paths = get_allowed_paths(&db, &role);
+    if !is_path_allowed(path, &allowed_paths) {
+        return Err(AppError::Forbidden("无权访问此路径".to_string()));
+    }
+
+    let safe_path = sanitize_path(path, &file_service.base_dir)
+        .map_err(|e| AppError::PathTraversal(e))?;
+
+    let file = std::fs::File::open(&safe_path)
+        .map_err(|e| AppError::Internal(format!("打开文件失败: {}", e)))?;
+
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| AppError::Internal(format!("读取APK失败: {}", e)))?;
+
+    let mut entries = Vec::new();
+    let mut total_size = 0u64;
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i)
+            .map_err(|e| AppError::Internal(format!("读取条目失败: {}", e)))?;
+        let name = entry.name().to_string();
+        total_size += entry.size();
+        if name.contains("AndroidManifest.xml") || name.ends_with(".dex") || name.starts_with("res/") || name.starts_with("assets/") {
+            entries.push(serde_json::json!({
+                "name": name,
+                "size": entry.size(),
+                "is_dir": entry.is_dir(),
+            }));
+        }
+    }
+
+    let file_size = std::fs::metadata(&safe_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "code": 0,
+        "message": "success",
+        "data": {
+            "file_size": file_size,
+            "uncompressed_size": total_size,
+            "entry_count": archive.len(),
+            "key_entries": entries
+        }
     })))
 }

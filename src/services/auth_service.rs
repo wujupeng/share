@@ -86,6 +86,25 @@ impl AuthService {
         Ok((token, user.role.as_str().to_string(), self.config.auth.jwt_expiration_hours * 3600))
     }
 
+    pub fn verify_credentials(&self, username: &str, password: &str) -> Result<String, AppError> {
+        let conn = self.db.lock().map_err(|e| AppError::Internal(e.to_string()))?;
+        let user = UserRepo::find_by_username(&conn, username)
+            .map_err(|e| AppError::Internal(e.to_string()))?
+            .ok_or_else(|| AppError::Unauthorized("用户名或密码错误".to_string()))?;
+
+        if user.status == UserStatus::Disabled {
+            return Err(AppError::Unauthorized("账户已禁用".to_string()));
+        }
+
+        let valid = bcrypt::verify(password, &user.password_hash)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        if !valid {
+            return Err(AppError::Unauthorized("用户名或密码错误".to_string()));
+        }
+
+        Ok(user.role.as_str().to_string())
+    }
+
     pub fn verify_token(&self, token: &str) -> Result<Claims, AppError> {
         let token_data = decode::<Claims>(
             token,

@@ -56,4 +56,13 @@ export const filesApi = {
     const token = authStore.token || ''
     return `/api/files/preview?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`
   },
+  previewArchive(path: string) {
+    return api.get<{ data: { entries: any[]; total: number } }>('/files/archive', { params: { path } })
+  },
+  previewApk(path: string) {
+    return api.get<{ data: { file_size: number; uncompressed_size: number; entry_count: number; key_entries: any[] } }>('/files/apk', { params: { path } })
+  },
+  getOnlyOfficeConfig(path: string, mode?: string) {
+    return api.get<{ data: { config: any; server: string } }>('/files/onlyoffice/config', { params: { path, mode } })
+  },
 }

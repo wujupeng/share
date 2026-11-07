@@ -120,6 +120,51 @@ async fn spa_fallback(
     HttpResponse::NotFound().body("Static files not configured")
 }
 
+#[cfg(target_os = "windows")]
+fn establish_smb_connection(config: &AppConfig) {
+    use std::process::Command;
+
+    let remote_path = match &config.smb.remote_path {
+        Some(p) if !p.is_empty() => p,
+        _ => return,
+    };
+    let username = config.smb.username.as_deref().unwrap_or("guest");
+    let password = config.smb.password.as_deref().unwrap_or("");
+
+    tracing::info!("建立 SMB 连接: {} (用户: {})", remote_path, username);
+
+    let _ = Command::new("net")
+        .args(["use", remote_path, "/delete", "/y"])
+        .output();
+
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    let user_arg = format!("/user:{}", username);
+    let result = Command::new("net")
+        .args(["use", remote_path, &user_arg, password, "/persistent:yes"])
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            tracing::info!("SMB 连接成功: {}", remote_path);
+        }
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::error!(
+                "SMB 连接失败: {} | stdout: {} | stderr: {}",
+                remote_path, stdout, stderr
+            );
+        }
+        Err(e) => {
+            tracing::error!("SMB 连接命令执行失败: {}", e);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn establish_smb_connection(_config: &AppConfig) {}
+
 pub async fn run_server(
     config_path: &str,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
@@ -162,6 +207,7 @@ pub async fn run_server(
     }
 
     let auth_service = AuthService::new(db.clone(), config.clone());
+    establish_smb_connection(&config);
     let file_service = FileService::new(&config.storage.base_dir);
 
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);

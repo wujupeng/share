@@ -12,6 +12,8 @@ pub struct AppConfig {
     pub platform: PlatformConfig,
     #[serde(default)]
     pub security: SecurityConfig,
+    #[serde(default)]
+    pub smb: SmbConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -112,6 +114,16 @@ fn default_force_admin_setup() -> bool { true }
 fn default_log_retention() -> u32 { 30 }
 fn default_tls_min_version() -> String { "1.2".to_string() }
 fn default_jwt_cookie_only() -> bool { false }
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SmbConfig {
+    #[serde(default)]
+    pub remote_path: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+}
 
 impl AppConfig {
     pub fn load(path: &str) -> Result<Self, String> {
